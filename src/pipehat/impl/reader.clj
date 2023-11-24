@@ -146,69 +146,84 @@
   [{:keys [field-separator repetition-separator component-separator sub-component-separator]
     :as encoding-characters}
    ^PushbackReader reader]
-  (loop [xs []]
+  (loop [xs (transient [])]
     (let [n (.read reader)]
       (cond
         (= EOS n)
-        (unwrap1 xs)
+        (not-empty (persistent! xs))
 
         (=* EB CR field-separator component-separator sub-component-separator repetition-separator n)
-        (do (.unread reader n) (unwrap1 xs))
+        (do (.unread reader n) (not-empty (persistent! xs)))
 
         :else
         (do (.unread reader n)
-          (recur (conj xs (read-string encoding-characters reader))))))))
+            (if-some [s (read-string encoding-characters reader)]
+              (recur (conj! xs s))
+              (recur xs)))))))
 
 (defn read-sub-component
   "Given a map of encoding characters and a reader, read a sub-component."
   [{:keys [field-separator repetition-separator component-separator sub-component-separator]
     :as encoding-characters}
    ^PushbackReader reader]
-  (loop [xs []]
+  (loop [xs (transient [])]
     (let [n (.read reader)]
       (cond
         (= EOS n)
-        (unwrap1 xs)
+        (not-empty (persistent! xs))
 
         (=* EB CR field-separator component-separator sub-component-separator n)
-        (do (.unread reader n) (unwrap1 xs))
+        (do (.unread reader n) (not-empty (persistent! xs)))
 
-        (= repetition-separator n)
-        (let [repetition (read-repetition encoding-characters reader)]
-          (recur (with-meta (conj xs repetition) {:pipehat.api/element-type :repetition})))
-
+        #_(= repetition-separator n)
         :else
+        (if-some [repetition (read-repetition encoding-characters reader)]
+          (recur (conj! xs repetition))
+          (recur xs))
+
+        #_#_:else
         (do (.unread reader n)
-          (recur (conj xs (read-string encoding-characters reader))))))))
+            (if-some [s (read-string encoding-characters reader)]
+              (recur (conj! xs s))
+              (recur xs)))))))
 
 (defn read-component
   "Given a map of encoding characters and a reader, read a component."
   [{:keys [field-separator repetition-separator component-separator sub-component-separator]
     :as encoding-characters}
    ^PushbackReader reader]
-  (loop [xs [] n SOE]
+  (loop [xs (transient []) n SOE]
     (cond
       (= EOS n)
-      (unwrap1 xs)
+      (not-empty (persistent! xs))
 
       (=* EB CR field-separator component-separator n)
-      (do (.unread reader n) (unwrap1 xs))
+      (do (.unread reader n) (not-empty (persistent! xs)))
 
-      (= repetition-separator n)
-      (let [repetition (read-repetition encoding-characters reader)]
-        (recur
-          (with-meta (conj xs repetition) {:pipehat.api/element-type :repetition})
-          (.read reader)))
-
-      (= sub-component-separator n)
-      (let [sub-component (read-sub-component encoding-characters reader)]
-        (recur
-          (with-meta (conj xs sub-component) {:pipehat.api/element-type :sub-component})
-          (.read reader)))
-
+      #_(= repetition-separator n)
       :else
+      (if-some [repetition (read-repetition encoding-characters reader)]
+        (recur
+          (conj! xs repetition)
+          (.read reader))
+        (recur
+          xs
+          (.read reader)))
+
+      #_#_(= sub-component-separator n)
+      (if-some [sub-component (read-sub-component encoding-characters reader)]
+        (recur
+          (conj! xs sub-component)
+          (.read reader))
+        (recur
+          xs
+          (.read reader)))
+
+      #_#_:else
       (recur
-        (conj xs (read-string encoding-characters reader))
+        (if-some [s (read-string encoding-characters reader)]
+          (conj! xs s)
+          xs)
         (.read reader)))))
 
 (comment
@@ -220,17 +235,18 @@
   [{:keys [field-separator]
     :as encoding-characters}
    ^PushbackReader reader]
-  (loop [xs [] n SOE]
+  (loop [xs (transient []) n SOE]
     (cond
       (= EOS n)
-      (unwrap1 xs)
+      (persistent! xs)
 
       (=* EB CR field-separator n)
-      (do (.unread reader n) (unwrap1 xs))
+      (do (.unread reader n) (persistent! xs))
 
       :else
-      (let [component (read-component encoding-characters reader)]
-        (recur (with-meta (conj xs component) {:pipehat.api/element-type :component}) (.read reader))))))
+      (if-some [component (read-component encoding-characters reader)]
+        (recur (conj! xs component) (.read reader))
+        (recur xs (.read reader))))))
 
 (comment
   (read-field encoding-characters (<< "^"))
@@ -431,4 +447,17 @@
   (read (<< (str (char SB) (char ACK) (char EB) (char CR))) {:protocol :mllp})
   (read (<< (str (char SB) "MSH|^~\\&" (char EB) (char CR))) {})
   (read (<< (str "X" (char SB) "MSH|^~\\&" (char EB) (char CR))) {:protocol :mllp})
+  (read (<< (str "MSH|^~\\&|MegaReg|XYZHospC|SuperOE|XYZImgCtr|20060529090131-0500||ADT^A01^ADT_A01|01052901|P|2.5"
+                 \return
+                 \newline
+                 "PID|5"
+                 \return
+                 \newline)) {})
+  (read (<< (str "MSH|^~\\&|MegaReg|XYZHospC|SuperOE|XYZImgCtr|20060529090131-0500||ADT^A01^ADT_A01|01052901|P|2.5"
+                 \return
+                 "PID|5"
+                 \return)) {})
+  (read (<< (str "MSH|^~\\&|MegaReg|XYZHospC|SuperOE|XYZImgCtr|20060529090131-0500||ADT^A01^ADT_A01|01052901|P|2.5"
+                 \return
+                 "PID|5|4|534^34~534^34")) {})
   ,,,)
